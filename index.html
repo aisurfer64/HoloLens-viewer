@@ -2,14 +2,33 @@
 <html lang="en">
 <head>
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>Morena Surgical 3D Viewer</title>
+  <meta name="description" content="Explore the Morena Surgical device in 3D and discover the patented sensor at its core.">
+  <meta name="theme-color" content="#000000">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=Instrument+Serif:ital@0;1&display=swap" rel="stylesheet">
   <style>
     :root {
       /* How much of Sketchfab's own bars and edge buttons to push off-screen */
       --crop-top: 90px;
       --crop-bottom: 90px;
       --crop-side: 24px;
+
+      /* Design tokens */
+      --accent: hsl(168 62% 72%);
+      --accent-soft: hsla(168 62% 72% / 0.16);
+      --accent-line: hsla(168 62% 72% / 0.38);
+      --glass: hsla(222 20% 9% / 0.58);
+      --glass-border: hsla(0 0% 100% / 0.09);
+      --text: hsla(0 0% 100% / 0.94);
+      --text-dim: hsla(0 0% 100% / 0.64);
+      --text-faint: hsla(0 0% 100% / 0.42);
+      --ease-out: cubic-bezier(0.22, 1, 0.36, 1);
+      --edge: 24px;
+      --trigger-size: 44px;
+      --radius-panel: 22px;
     }
     html, body {
       margin: 0;
@@ -18,6 +37,9 @@
       height: 100%;
       overflow: hidden;
       background: #000;
+      font-family: "Inter", system-ui, -apple-system, "Segoe UI", sans-serif;
+      color: var(--text);
+      -webkit-font-smoothing: antialiased;
     }
     iframe {
       position: fixed;
@@ -29,20 +51,936 @@
       border: 0;
       display: block;
     }
+    .sr-only {
+      position: absolute;
+      width: 1px; height: 1px;
+      overflow: hidden;
+      clip: rect(0 0 0 0);
+      white-space: nowrap;
+    }
+
+    /* ── Soft shade behind the panel while zoomed in ───────────────── */
+    .scrim {
+      position: fixed;
+      inset: 0;
+      z-index: 5;
+      pointer-events: none;
+      opacity: 0;
+      background: radial-gradient(120% 100% at 0% 100%, rgba(0, 0, 0, 0.55), transparent 55%);
+      transition: opacity 0.9s var(--ease-out);
+    }
+    body.is-focused .scrim { opacity: 1; }
+
+    /* ── "Click me" trigger ────────────────────────────────────────── */
+    .trigger {
+      position: fixed;
+      left: max(var(--edge), env(safe-area-inset-left));
+      bottom: max(var(--edge), env(safe-area-inset-bottom));
+      z-index: 10;
+      display: flex;
+      align-items: center;
+      height: var(--trigger-size);
+      padding: 4px;
+      border: 1px solid var(--glass-border);
+      border-radius: 999px;
+      background: var(--glass);
+      -webkit-backdrop-filter: blur(18px) saturate(140%);
+      backdrop-filter: blur(18px) saturate(140%);
+      box-shadow: 0 10px 30px -10px rgba(0, 0, 0, 0.7), inset 0 1px 0 hsla(0 0% 100% / 0.06);
+      color: var(--text);
+      font: inherit;
+      cursor: pointer;
+      -webkit-tap-highlight-color: transparent;
+      opacity: 0;
+      transform: translateY(10px);
+      transition:
+        opacity 0.6s var(--ease-out),
+        transform 0.6s var(--ease-out),
+        border-color 0.3s ease,
+        background-color 0.3s ease;
+    }
+    .trigger.is-ready { opacity: 1; transform: none; }
+    .trigger:hover { border-color: var(--accent-line); }
+    .trigger:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+    body.is-focused .trigger {
+      opacity: 0;
+      transform: scale(0.85);
+      pointer-events: none;
+    }
+
+    .trigger__icon {
+      position: relative;
+      flex: none;
+      display: grid;
+      place-items: center;
+      width: calc(var(--trigger-size) - 10px);
+      height: calc(var(--trigger-size) - 10px);
+      border-radius: 50%;
+      background: radial-gradient(circle at 30% 25%, hsla(168 62% 72% / 0.28), hsla(168 62% 40% / 0.08) 70%);
+      border: 1px solid var(--accent-line);
+      color: var(--accent);
+    }
+    .trigger__icon svg { width: 18px; height: 18px; }
+    .trigger__icon::after {
+      content: "";
+      position: absolute;
+      inset: -1px;
+      border-radius: 50%;
+      border: 1px solid var(--accent);
+      animation: halo 2.8s var(--ease-out) infinite;
+      pointer-events: none;
+    }
+    @keyframes halo {
+      0%        { transform: scale(1);    opacity: 0.55; }
+      70%, 100% { transform: scale(1.85); opacity: 0; }
+    }
+
+    .trigger__label {
+      display: flex;
+      flex-direction: column;
+      align-items: flex-start;
+      max-width: 0;
+      padding: 0;
+      opacity: 0;
+      overflow: hidden;
+      white-space: nowrap;
+      text-align: left;
+      transition:
+        max-width 0.55s var(--ease-out),
+        padding 0.55s var(--ease-out),
+        opacity 0.35s ease;
+    }
+    .trigger:hover .trigger__label,
+    .trigger:focus-visible .trigger__label,
+    .trigger.is-teasing .trigger__label {
+      max-width: 200px;
+      padding: 0 14px 0 10px;
+      opacity: 1;
+    }
+    .trigger__eyebrow {
+      font-size: 9.5px;
+      font-weight: 600;
+      letter-spacing: 0.16em;
+      text-transform: uppercase;
+      color: var(--accent);
+      line-height: 1.2;
+    }
+    .trigger__text {
+      font-size: 13px;
+      font-weight: 500;
+      letter-spacing: -0.005em;
+      line-height: 1.3;
+    }
+
+    /* ── Pop-up panel (grows out of the trigger) ───────────────────── */
+    .panel {
+      position: fixed;
+      left: max(var(--edge), env(safe-area-inset-left));
+      bottom: max(var(--edge), env(safe-area-inset-bottom));
+      z-index: 11;
+      box-sizing: border-box;
+      width: min(380px, calc(100vw - 2 * var(--edge)));
+      max-height: calc(100dvh - 2 * var(--edge));
+      overflow-y: auto;
+      overscroll-behavior: contain;
+      padding: 30px 28px 24px;
+      border: 1px solid var(--glass-border);
+      border-radius: var(--radius-panel);
+      background:
+        radial-gradient(120% 55% at 0% 0%, hsla(168 70% 60% / 0.11), transparent 60%),
+        linear-gradient(180deg, hsla(222 20% 12% / 0.74), hsla(222 24% 6% / 0.82));
+      -webkit-backdrop-filter: blur(28px) saturate(150%);
+      backdrop-filter: blur(28px) saturate(150%);
+      box-shadow: 0 30px 80px -24px rgba(0, 0, 0, 0.75), inset 0 1px 0 hsla(0 0% 100% / 0.07);
+      clip-path: inset(calc(100% - var(--trigger-size)) calc(100% - var(--trigger-size)) 0 0 round calc(var(--trigger-size) / 2));
+      opacity: 0;
+      visibility: hidden;
+      transition:
+        clip-path 0.6s var(--ease-out),
+        opacity 0.3s ease 0.15s,
+        visibility 0s linear 0.6s;
+    }
+    .panel.is-open {
+      clip-path: inset(0 0 0 0 round var(--radius-panel));
+      opacity: 1;
+      visibility: visible;
+      transition:
+        clip-path 0.75s var(--ease-out),
+        opacity 0.2s ease,
+        visibility 0s;
+    }
+    .panel > * {
+      opacity: 0;
+      transform: translateY(8px);
+      transition: opacity 0.25s ease, transform 0.25s ease;
+    }
+    .panel.is-open > * {
+      opacity: 1;
+      transform: none;
+      transition:
+        opacity 0.6s var(--ease-out) calc(0.22s + var(--i, 0) * 0.06s),
+        transform 0.6s var(--ease-out) calc(0.22s + var(--i, 0) * 0.06s);
+    }
+
+    .panel__close {
+      position: absolute;
+      top: 14px;
+      right: 14px;
+      display: grid;
+      place-items: center;
+      width: 32px;
+      height: 32px;
+      padding: 0;
+      border: 1px solid transparent;
+      border-radius: 50%;
+      background: hsla(0 0% 100% / 0.05);
+      color: var(--text-dim);
+      cursor: pointer;
+      transition: background-color 0.2s ease, color 0.2s ease, border-color 0.2s ease, transform 0.3s var(--ease-out);
+    }
+    .panel__close:hover { background: hsla(0 0% 100% / 0.1); color: var(--text); transform: rotate(90deg); }
+    .panel__close:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+    .panel__close svg { width: 14px; height: 14px; }
+
+    .panel__eyebrow {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      margin: 0 0 14px;
+      font-size: 10.5px;
+      font-weight: 600;
+      letter-spacing: 0.16em;
+      text-transform: uppercase;
+      color: var(--accent);
+    }
+    .panel__eyebrow::before {
+      content: "";
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      background: var(--accent);
+      box-shadow: 0 0 0 4px var(--accent-soft);
+    }
+    .panel__title {
+      margin: 0 0 14px;
+      font-family: "Instrument Serif", Georgia, serif;
+      font-weight: 400;
+      font-size: 30px;
+      line-height: 1.02;
+      letter-spacing: -0.01em;
+    }
+    .panel__title em {
+      font-style: italic;
+      background: linear-gradient(90deg, var(--accent), hsl(190 70% 78%));
+      -webkit-background-clip: text;
+      background-clip: text;
+      color: transparent;
+    }
+    .panel__lead {
+      margin: 0;
+      font-size: 14.5px;
+      line-height: 1.6;
+      color: var(--text-dim);
+    }
+    .panel__divider {
+      height: 1px;
+      margin: 22px 0 18px;
+      background: linear-gradient(90deg, var(--glass-border), transparent);
+    }
+    .panel__heading {
+      margin: 0 0 8px;
+      font-size: 11px;
+      font-weight: 600;
+      letter-spacing: 0.14em;
+      text-transform: uppercase;
+      color: var(--text-faint);
+    }
+    .panel__body {
+      margin: 0;
+      font-size: 14px;
+      line-height: 1.65;
+      color: var(--text-dim);
+    }
+    .panel__back {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      margin-top: 24px;
+      padding: 10px 16px 10px 14px;
+      border: 1px solid var(--glass-border);
+      border-radius: 999px;
+      background: hsla(0 0% 100% / 0.04);
+      color: var(--text);
+      font: inherit;
+      font-size: 13px;
+      font-weight: 500;
+      cursor: pointer;
+      transition: border-color 0.25s ease, background-color 0.25s ease;
+    }
+    .panel__back:hover { border-color: var(--accent-line); background: var(--accent-soft); }
+    .panel__back:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+    .panel__back svg { width: 14px; height: 14px; transition: transform 0.4s var(--ease-out); }
+    .panel__back:hover svg { transform: rotate(-45deg); }
+
+    /* ── Focus box that lands on the sensor after the zoom ─────────── */
+    .marker {
+      position: fixed;
+      left: 0;
+      top: 0;
+      z-index: 8;
+      width: 0;
+      height: 0;
+      pointer-events: none;
+      opacity: 0;
+      visibility: hidden;
+      transition: opacity 0.35s ease, visibility 0s linear 0.35s;
+      will-change: transform;
+    }
+    .marker.is-visible {
+      opacity: 1;
+      visibility: visible;
+      transition: opacity 0.35s ease, visibility 0s;
+    }
+    .marker.is-visible.is-hidden-behind { opacity: 0; }
+    .marker__box {
+      position: absolute;
+      left: -24px;
+      top: -24px;
+      width: 48px;
+      height: 48px;
+      opacity: 0;
+      transform: scale(2.2) rotate(-8deg);
+      transition: transform 0.9s var(--ease-out), opacity 0.4s ease;
+    }
+    .marker.is-visible .marker__box { opacity: 1; transform: none; }
+    .marker__box i {
+      position: absolute;
+      width: 12px;
+      height: 12px;
+      border: 0 solid var(--accent);
+      filter: drop-shadow(0 0 5px hsla(168 62% 72% / 0.7));
+      animation: breathe 2.4s ease-in-out infinite;
+    }
+    .marker__box i:nth-child(1) { left: 0;  top: 0;    border-width: 1.75px 0 0 1.75px; border-top-left-radius: 5px;     --dx: -2px; --dy: -2px; }
+    .marker__box i:nth-child(2) { right: 0; top: 0;    border-width: 1.75px 1.75px 0 0; border-top-right-radius: 5px;    --dx: 2px;  --dy: -2px; }
+    .marker__box i:nth-child(3) { right: 0; bottom: 0; border-width: 0 1.75px 1.75px 0; border-bottom-right-radius: 5px; --dx: 2px;  --dy: 2px; }
+    .marker__box i:nth-child(4) { left: 0;  bottom: 0; border-width: 0 0 1.75px 1.75px; border-bottom-left-radius: 5px;  --dx: -2px; --dy: 2px; }
+    @keyframes breathe {
+      0%, 100% { transform: translate(0, 0); }
+      50%      { transform: translate(var(--dx), var(--dy)); }
+    }
+    .marker__ping {
+      position: absolute;
+      left: -7px;
+      top: -7px;
+      width: 14px;
+      height: 14px;
+      border-radius: 50%;
+      border: 1.5px solid var(--accent);
+      opacity: 0;
+    }
+    .marker.is-visible .marker__ping { animation: ping 2.2s var(--ease-out) 0.5s infinite; }
+    @keyframes ping {
+      0%        { transform: scale(0.5); opacity: 0.9; }
+      80%, 100% { transform: scale(2.4); opacity: 0; }
+    }
+    .marker__leader {
+      position: absolute;
+      left: 24px;
+      top: -50px;
+      overflow: visible;
+      stroke: var(--accent);
+      stroke-width: 1.25;
+      fill: none;
+      stroke-dasharray: 40;
+      stroke-dashoffset: 40;
+      transition: stroke-dashoffset 0.5s var(--ease-out);
+    }
+    .marker.is-visible .marker__leader { stroke-dashoffset: 0; transition-delay: 0.45s; }
+    .marker__tag {
+      position: absolute;
+      left: 54px;
+      top: -44px;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      padding: 6px 11px 6px 9px;
+      border: 1px solid var(--accent-line);
+      border-radius: 999px;
+      background: var(--glass);
+      -webkit-backdrop-filter: blur(14px) saturate(140%);
+      backdrop-filter: blur(14px) saturate(140%);
+      white-space: nowrap;
+      font-size: 11.5px;
+      font-weight: 500;
+      letter-spacing: 0.01em;
+      color: var(--text);
+      opacity: 0;
+      transform: translate(-6px, -50%);
+      transition: opacity 0.3s ease, transform 0.3s ease;
+    }
+    .marker__tag::before {
+      content: "";
+      width: 5px;
+      height: 5px;
+      border-radius: 50%;
+      background: var(--accent);
+    }
+    .marker.is-visible .marker__tag {
+      opacity: 1;
+      transform: translate(0, -50%);
+      transition: opacity 0.5s var(--ease-out) 0.75s, transform 0.5s var(--ease-out) 0.75s;
+    }
+
+    /* ── Framing helper (only shown with ?frame in the URL) ────────── */
+    .frame-tools {
+      position: fixed;
+      top: 16px;
+      right: 16px;
+      z-index: 20;
+      display: flex;
+      gap: 8px;
+    }
+    .frame-tool {
+      padding: 8px 14px;
+      border: 1px solid var(--accent-line);
+      border-radius: 999px;
+      background: var(--glass);
+      -webkit-backdrop-filter: blur(16px);
+      backdrop-filter: blur(16px);
+      color: var(--accent);
+      font: 500 12px/1 "Inter", system-ui, sans-serif;
+      cursor: pointer;
+    }
+
+    .panel__body strong { color: var(--text); font-weight: 600; }
+    .panel__body--second { margin-top: 12px; }
+    /* label flips to the left when the sensor is near the right edge of the screen */
+    .marker.is-flipped .marker__leader { left: -54px; transform: scaleX(-1); }
+    .marker.is-flipped .marker__tag { left: auto; right: 54px; transform: translate(6px, -50%); }
+    .marker.is-flipped.is-visible .marker__tag { transform: translate(0, -50%); }
+
+    /* ── "Made by" credit (bottom-right, opposite the trigger) ──────── */
+    .credit {
+      position: fixed;
+      right: max(var(--edge), env(safe-area-inset-right));
+      bottom: max(var(--edge), env(safe-area-inset-bottom));
+      z-index: 9;
+      display: flex;
+      align-items: baseline;
+      gap: 7px;
+      margin: 0;
+      padding: 8px 4px;
+      cursor: default;
+      user-select: none;
+      opacity: 0;
+      transform: translateY(8px);
+      transition: opacity 0.8s var(--ease-out) 0.3s, transform 0.8s var(--ease-out) 0.3s;
+    }
+    .credit.is-ready { opacity: 1; transform: none; }
+    .credit__by {
+      font-size: 10.5px;
+      font-weight: 500;
+      letter-spacing: 0.16em;
+      text-transform: uppercase;
+      color: var(--text-faint);
+      transition: color 0.4s ease;
+    }
+    .credit__name {
+      position: relative;
+      display: inline-flex;
+      font-family: "Instrument Serif", Georgia, serif;
+      font-style: italic;
+      font-size: 19px;
+      line-height: 1;
+      color: var(--text-dim);
+      text-shadow: 0 1px 12px rgba(0, 0, 0, 0.6);
+    }
+    .credit__name > span {
+      display: inline-block;
+      white-space: pre;
+      transition: transform 0.5s var(--ease-out), color 0.4s ease;
+      transition-delay: calc(var(--n) * 22ms);
+    }
+    .credit__name::after {
+      content: "";
+      position: absolute;
+      left: 0;
+      right: 0;
+      bottom: -5px;
+      height: 1px;
+      background: linear-gradient(90deg, var(--accent), hsl(190 70% 78%));
+      transform: scaleX(0);
+      transform-origin: right;
+      transition: transform 0.6s var(--ease-out);
+    }
+    .credit:hover .credit__by { color: var(--text-dim); }
+    .credit:hover .credit__name > span {
+      color: var(--accent);
+      animation: wave 0.6s var(--ease-out) calc(var(--n) * 35ms) both;
+    }
+    .credit:hover .credit__name > span:nth-child(n+7) { color: hsl(190 70% 78%); }
+    .credit:hover .credit__name::after { transform: scaleX(1); transform-origin: left; }
+    @keyframes wave {
+      0%   { transform: translateY(0); }
+      40%  { transform: translateY(-5px); }
+      100% { transform: translateY(0); }
+    }
+
+    @media (max-width: 600px) {
+      :root { --edge: 14px; }
+      .panel { padding: 26px 22px 20px; max-height: 60dvh; }
+      .panel__title { font-size: 26px; }
+      .credit__name { font-size: 16px; }
+      body.is-focused .credit { opacity: 0; pointer-events: none; }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      .trigger__icon::after, .marker__box i, .marker.is-visible .marker__ping, .credit:hover .credit__name > span { animation: none; }
+      .trigger, .trigger__label, .panel, .panel > *, .panel.is-open > *, .scrim { transition-duration: 0.01s !important; transition-delay: 0s !important; }
+    }
   </style>
 </head>
 <body>
-  <iframe
-    title="PRISM Medical Device"
-    allowfullscreen
-    mozallowfullscreen="true"
-    webkitallowfullscreen="true"
-    allow="autoplay; fullscreen; xr-spatial-tracking"
-    xr-spatial-tracking
-    execution-while-out-of-viewport
-    execution-while-not-rendered
-    web-share
-    src="https://sketchfab.com/models/3dd665394e6f4b62ba16338e55828ddd/embed?autostart=1&preload=1&ui_theme=dark&ui_hint=0&ui_infos=0&ui_watermark=0&ui_watermark_link=0&ui_help=0&ui_settings=0&ui_inspector=0&ui_annotations=0&ui_stop=0&ui_vr=0&ui_ar=0&ui_ar_help=0&ui_ar_qrcode=0&ui_controls=0&ui_color=000000">
-  </iframe>
+  <h1 class="sr-only">Morena Surgical 3D Viewer</h1>
+
+  <main>
+    <iframe
+      id="viewer"
+      title="Morena Surgical 3D Viewer"
+      allowfullscreen
+      mozallowfullscreen="true"
+      webkitallowfullscreen="true"
+      allow="autoplay; fullscreen; xr-spatial-tracking"
+      xr-spatial-tracking
+      execution-while-out-of-viewport
+      execution-while-not-rendered
+      web-share>
+    </iframe>
+  </main>
+
+  <div class="scrim" aria-hidden="true"></div>
+
+  <div id="sensor-marker" class="marker" aria-hidden="true">
+    <span class="marker__box"><i></i><i></i><i></i><i></i></span>
+    <span class="marker__ping"></span>
+    <svg class="marker__leader" width="30" height="26" viewBox="0 0 30 26"><polyline points="0,24 12,6 30,6"/></svg>
+    <span class="marker__tag">The camera</span>
+  </div>
+
+  <button id="sensor-trigger" class="trigger" type="button"
+          aria-haspopup="dialog" aria-expanded="false" aria-controls="sensor-panel">
+    <span class="trigger__icon" aria-hidden="true">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round">
+        <path d="M4 8.5V6a2 2 0 0 1 2-2h2.5M15.5 4H18a2 2 0 0 1 2 2v2.5M20 15.5V18a2 2 0 0 1-2 2h-2.5M8.5 20H6a2 2 0 0 1-2-2v-2.5"/>
+        <circle cx="12" cy="12" r="3.4"/>
+        <circle cx="12" cy="12" r="0.9" fill="currentColor" stroke="none"/>
+      </svg>
+    </span>
+    <span class="trigger__label">
+      <span class="trigger__eyebrow">Patented</span>
+      <span class="trigger__text">Explore the Innovation</span>
+    </span>
+  </button>
+
+  <p id="credit" class="credit">
+    <span class="credit__by">Made by</span>
+    <span class="credit__name" aria-label="Aditya Gopu">Aditya Gopu</span>
+  </p>
+
+  <section id="sensor-panel" class="panel" role="dialog" aria-modal="false"
+           aria-labelledby="sensor-panel-title" aria-hidden="true" inert>
+    <button id="sensor-close" class="panel__close" type="button" aria-label="Close and return to full view" style="--i:0">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+        <path d="M6 6l12 12M18 6L6 18"/>
+      </svg>
+    </button>
+
+    <p class="panel__eyebrow" style="--i:1">What you&rsquo;re looking at</p>
+    <h2 id="sensor-panel-title" class="panel__title" style="--i:2">This is the camera, but the patent is <em>the software behind it.</em></h2>
+
+    <div class="panel__divider" style="--i:3"></div>
+
+    <p class="panel__body" style="--i:4">
+      Close one eye, then the other, and your finger seems to jump. That&rsquo;s <strong>parallax</strong>.
+      In surgery, the same shift throws off the device&rsquo;s measurements of the anatomy.
+    </p>
+    <p class="panel__body panel__body--second" style="--i:5">
+      The patented software reads <strong>fiducial markers</strong>, fixed reference points on the
+      instrument, and corrects the shift so every measurement stays true.
+    </p>
+
+
+    <button id="sensor-back" class="panel__back" type="button" style="--i:6">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M4 12a8 8 0 1 0 2.4-5.7M4 4v4.5h4.5"/>
+      </svg>
+      Back to full view
+    </button>
+  </section>
+
+  <script src="https://static.sketchfab.com/api/sketchfab-viewer-1.12.1.js"></script>
+  <script>
+  (() => {
+    'use strict';
+
+    const MODEL_UID = '3dd665394e6f4b62ba16338e55828ddd';
+
+    /* ── Tuning: adjust these if the zoom isn't framed right ───────────────
+       zoomView    Exact close-up camera. Open the site with ?frame on the end of the URL,
+                   open the pop-up, line up the shot, click "Copy view", and paste it here.
+                   When set, it replaces the automatic guess below.
+       zoomAmount  How close the automatic zoom gets (fraction of the starting distance;
+                   smaller = closer).
+       aimHeight   Where on screen the automatic zoom aims in the starting view
+                   (0 = top edge, 0.5 = middle, 1 = bottom edge). */
+    const CONFIG = {
+      zoomView: { position: [-1.8771, 42.5458, 4.271], target: [-7.6465, -3.5609, -4.1725] }, // sensor close-up; the target is the sensor itself
+      zoomAmount: 0.4,
+      aimHeight: 0.42,
+      zoomSeconds: 1.8,
+      returnSeconds: 1.4,
+      // Exact 3D spot of the camera dot that the focus box locks onto.
+      // Set it with ?frame -> "Pick sensor" -> click the dot -> paste the copied value here.
+      sensorPoint: {
+        point: [-3.6441, 25.2361, 1.0125],
+        // Which way the front of the band faces (estimated from the close-up camera angle);
+        // the box fades out while the camera is behind this surface.
+        normal: [0.10, 0.97, 0.18],
+      },
+      // Fallback only (when sensorPoint is empty): screen-pixel nudge [right, down] from the zoom target.
+      markerOffset: [-29, 7],
+    };
+
+    const EMBED_OPTIONS = {
+      autostart: 1, preload: 1, ui_theme: 'dark', ui_hint: 0, ui_infos: 0,
+      ui_watermark: 0, ui_watermark_link: 0, ui_help: 0, ui_settings: 0,
+      ui_inspector: 0, ui_annotations: 0, ui_stop: 0, ui_vr: 0, ui_ar: 0,
+      ui_ar_help: 0, ui_ar_qrcode: 0, ui_controls: 0, ui_color: '000000',
+    };
+
+    const iframe   = document.getElementById('viewer');
+    const trigger  = document.getElementById('sensor-trigger');
+    const panel    = document.getElementById('sensor-panel');
+    const closeBtn = document.getElementById('sensor-close');
+    const backBtn  = document.getElementById('sensor-back');
+    const marker   = document.getElementById('sensor-marker');
+    const credit   = document.getElementById('credit');
+    const reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    const frameMode = new URLSearchParams(location.search).has('frame');
+
+    /* Split the credit name into letters for the hover wave */
+    const nameEl = credit.querySelector('.credit__name');
+    nameEl.innerHTML = '';
+    [...'Aditya Gopu'].forEach((ch, n) => {
+      const s = document.createElement('span');
+      s.textContent = ch;
+      s.style.setProperty('--n', n);
+      s.setAttribute('aria-hidden', 'true');
+      nameEl.appendChild(s);
+    });
+
+    /* ── Small vector helpers ── */
+    const add   = (a, b) => a.map((v, i) => v + b[i]);
+    const sub   = (a, b) => a.map((v, i) => v - b[i]);
+    const scale = (a, s) => a.map(v => v * s);
+    const len   = a => Math.hypot(...a);
+    const norm  = a => scale(a, 1 / (len(a) || 1));
+    const wait  = ms => new Promise(r => setTimeout(r, ms));
+    const round = a => Array.from(a, v => +v.toFixed(4));
+
+    let api = null;
+    let resolveReady;
+    const ready = new Promise(r => { resolveReady = r; });
+    let focusPromise = null;   // close-up camera, worked out once from the starting view
+    let returnView = null;     // camera to return to when the pop-up closes
+    let isOpen = false;
+
+    /* ── Promise wrappers around the Sketchfab Viewer API ── */
+    const getCamera = () => new Promise((res, rej) =>
+      api.getCameraLookAt((err, cam) => (err ? rej(err) : res(cam))));
+    const toScreen = p => new Promise(res =>
+      api.getWorldToScreenCoordinates(p, (a, b) => res(b && b.canvasCoord ? b : a)));
+    const pick = gl => new Promise(res =>
+      api.pickFromScreen(gl, (err, hit) => res(!err && hit && hit.position3D ? hit : null)));
+    const moveCamera = (view, secs) => {
+      if (api && view) api.setCameraLookAt(view.position, view.target, reduceMotion ? 0.3 : secs);
+    };
+
+    /* Work out the close-up from the starting view: find the part of the device the
+       camera is looking at (a bit above centre, where the front sensor band sits),
+       then move straight in toward it. Also measures which world directions are
+       screen-right / screen-down so the close-up can be nudged clear of the panel. */
+    async function computeFocus() {
+      if (CONFIG.zoomView) return { view: CONFIG.zoomView, right: null };
+
+      const home = await getCamera();
+      const rect = iframe.getBoundingClientRect();
+
+      let dpr = window.devicePixelRatio || 1;
+      const probe = await toScreen(home.target);
+      if (probe && probe.glCoord && probe.canvasCoord && Math.abs(probe.canvasCoord[0]) > 1) {
+        dpr = probe.glCoord[0] / probe.canvasCoord[0];
+      }
+      const toGL = (vx, vy) => [(vx - rect.left) * dpr, (rect.height - (vy - rect.top)) * dpr];
+
+      let aim = null;
+      for (const h of [CONFIG.aimHeight, 0.5, 0.35]) {
+        const hit = await pick(toGL(window.innerWidth / 2, window.innerHeight * h));
+        if (hit) { aim = hit.position3D; break; }
+      }
+      aim = aim || home.target;
+
+      const startDist = len(sub(home.position, aim));
+      const dist = startDist * CONFIG.zoomAmount;
+      const view = { position: add(aim, scale(norm(sub(home.position, aim)), dist)), target: aim };
+
+      const focus = { view, right: null };
+      try {
+        const eps = startDist * 0.01;
+        const s0 = (await toScreen(aim)).canvasCoord;
+        const gx = [], gy = [];
+        for (let i = 0; i < 3; i++) {
+          const p = aim.slice();
+          p[i] += eps;
+          const s = (await toScreen(p)).canvasCoord;
+          gx.push((s[0] - s0[0]) / eps);
+          gy.push((s[1] - s0[1]) / eps);
+        }
+        if (len(gx) > 0 && len(gy) > 0) {
+          focus.right = norm(gx);
+          focus.down = norm(gy);
+          // pixels per world unit at the close-up distance
+          focus.pxX = len(gx) * startDist / dist;
+          focus.pxY = len(gy) * startDist / dist;
+        }
+      } catch (e) { /* no nudge; the close-up stays centred */ }
+      return focus;
+    }
+
+    /* Nudge the close-up so the sensor sits in the open space beside the panel
+       (to the right on desktop, above it on phones). */
+    function framedView(focus) {
+      if (!focus.right) return focus.view;
+      const r = panel.getBoundingClientRect();
+      let shift;
+      if (r.width < window.innerWidth * 0.6) {
+        shift = scale(focus.right, -(r.right / 2) / focus.pxX);
+      } else {
+        shift = scale(focus.down, ((window.innerHeight - r.top) / 2) / focus.pxY);
+      }
+      return { position: add(focus.view.position, shift), target: add(focus.view.target, shift) };
+    }
+
+    /* ── Focus box: sits on the camera dot and follows it while the view moves ── */
+    let markerPoint = null;
+    let markerShift = [0, 0];  // leftover pixel nudge, only used if the model pick fails
+    let markerTimer = 0;
+    let tracking = false;
+
+    let markerNormal = null;   // which way the dot's surface faces (to hide the box when turned away)
+    function placeMarker(s) {
+      if (!s || !s.canvasCoord) return;
+      const rect = iframe.getBoundingClientRect();
+      const x = rect.left + s.canvasCoord[0] + markerShift[0];
+      const y = rect.top + s.canvasCoord[1] + markerShift[1];
+      marker.style.transform = `translate(${x.toFixed(1)}px, ${y.toFixed(1)}px)`;
+      marker.classList.toggle('is-flipped', x > window.innerWidth - 230);
+    }
+    async function updateFacing() {
+      if (!markerNormal) return;
+      const cam = await getCamera();
+      const toCam = sub(cam.position, markerPoint);
+      const facing = toCam.reduce((d, v, i) => d + v * markerNormal[i], 0) > 0;
+      marker.classList.toggle('is-hidden-behind', !facing);
+    }
+    function trackMarker() {
+      if (!tracking) return;
+      Promise.all([toScreen(markerPoint), updateFacing()]).then(([s]) => {
+        if (!tracking) return;
+        placeMarker(s);
+        requestAnimationFrame(trackMarker);
+      }, () => { if (tracking) requestAnimationFrame(trackMarker); });
+    }
+
+    /* Where the box goes: the exact sensor point if known, otherwise the zoom target plus a pixel nudge.
+       sensorPoint can be [x, y, z] or { point: [x, y, z], normal: [x, y, z] }. */
+    function anchorPoint(target) {
+      const sp = CONFIG.sensorPoint;
+      if (Array.isArray(sp)) return { point: sp, normal: null, shift: [0, 0] };
+      if (sp && sp.point) return { point: sp.point, normal: sp.normal || null, shift: [0, 0] };
+      return { point: target, normal: null, shift: CONFIG.markerOffset || [0, 0] };
+    }
+
+    function showMarker(target, delayMs) {
+      clearTimeout(markerTimer);
+      markerTimer = setTimeout(async () => {
+        if (!isOpen) return;
+        const a = anchorPoint(target);
+        if (!isOpen) return;
+        markerPoint = a.point;
+        markerNormal = a.normal;
+        markerShift = a.shift;
+        placeMarker(await toScreen(markerPoint)); // position first, then fade in
+        if (!isOpen) return;
+        if (!tracking) { tracking = true; trackMarker(); }
+        marker.classList.add('is-visible');
+      }, delayMs);
+    }
+    function hideMarker() {
+      clearTimeout(markerTimer);
+      marker.classList.remove('is-visible');
+      setTimeout(() => { if (!isOpen) { tracking = false; marker.classList.remove('is-hidden-behind'); } }, 450);
+    }
+
+    async function zoomIn() {
+      await ready;
+      if (!focusPromise) focusPromise = computeFocus();
+      try {
+        const focus = await focusPromise;
+        if (!isOpen) return;
+        returnView = await getCamera();
+        const view = framedView(focus);
+        moveCamera(view, CONFIG.zoomSeconds);
+        // place the focus box once the camera has landed
+        showMarker(view.target, (reduceMotion ? 0.3 : CONFIG.zoomSeconds) * 1000 + 150);
+      } catch (e) {
+        console.warn('Sensor zoom unavailable:', e);
+      }
+    }
+
+    function openPanel() {
+      if (isOpen) return;
+      isOpen = true;
+      trigger.classList.remove('is-teasing');
+      document.body.classList.add('is-focused');
+      panel.classList.add('is-open');
+      panel.inert = false;
+      panel.setAttribute('aria-hidden', 'false');
+      trigger.setAttribute('aria-expanded', 'true');
+      setTimeout(() => { if (isOpen) closeBtn.focus({ preventScroll: true }); }, 400);
+      zoomIn();
+    }
+
+    function closePanel() {
+      if (!isOpen) return;
+      isOpen = false;
+      hideMarker();
+      document.body.classList.remove('is-focused');
+      panel.classList.remove('is-open');
+      panel.inert = true;
+      panel.setAttribute('aria-hidden', 'true');
+      trigger.setAttribute('aria-expanded', 'false');
+      trigger.focus({ preventScroll: true });
+      if (returnView) moveCamera(returnView, CONFIG.returnSeconds);
+      returnView = null;
+    }
+
+    trigger.addEventListener('click', openPanel);
+    closeBtn.addEventListener('click', closePanel);
+    backBtn.addEventListener('click', closePanel);
+    document.addEventListener('keydown', e => { if (e.key === 'Escape') closePanel(); });
+
+    let resizeTimer;
+    window.addEventListener('resize', () => {
+      clearTimeout(resizeTimer);
+      resizeTimer = setTimeout(async () => {
+        if (isOpen && focusPromise) moveCamera(framedView(await focusPromise), 0.6);
+      }, 200);
+    });
+
+    /* ── Reveal the trigger, with a brief label "tease" so people notice it ── */
+    let revealed = false;
+    function revealTrigger() {
+      if (revealed) return;
+      revealed = true;
+      trigger.classList.add('is-ready');
+      credit.classList.add('is-ready');
+      setTimeout(() => {
+        if (isOpen) return;
+        trigger.classList.add('is-teasing');
+        setTimeout(() => trigger.classList.remove('is-teasing'), 4200);
+      }, 1400);
+    }
+    setTimeout(revealTrigger, 6000); // fallback if the viewer is slow
+
+    /* ── Optional framing helper: add ?frame to the URL ── */
+    function setupFrameTool() {
+      const tools = document.createElement('div');
+      tools.className = 'frame-tools';
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'frame-tool';
+      btn.textContent = 'Copy view';
+      btn.addEventListener('click', async () => {
+        if (!api) return;
+        const cam = await getCamera();
+        const text = JSON.stringify({ position: round(cam.position), target: round(cam.target) });
+        console.log('zoomView:', text);
+        try { await navigator.clipboard.writeText(text); btn.textContent = 'Copied ✓'; }
+        catch (e) { window.prompt('Copy this view:', text); }
+        setTimeout(() => { btn.textContent = 'Copy view'; }, 1800);
+      });
+      tools.appendChild(btn);
+
+      // "Pick sensor": the next single click on the model copies that exact 3D point
+      const pickBtn = document.createElement('button');
+      pickBtn.type = 'button';
+      pickBtn.className = 'frame-tool';
+      pickBtn.textContent = 'Pick sensor';
+      let armed = false;
+      pickBtn.addEventListener('click', () => {
+        armed = true;
+        pickBtn.textContent = 'Now click the dot…';
+      });
+      api.addEventListener('click', async info => {
+        if (!armed || !info || !info.position3D) return;
+        armed = false;
+        const text = JSON.stringify(info.normal
+          ? { point: round(info.position3D), normal: round(info.normal) }
+          : round(info.position3D));
+        console.log('sensorPoint:', text);
+        // preview: put the box on the picked point right away
+        markerPoint = info.position3D;
+        markerNormal = info.normal || null;
+        markerShift = [0, 0];
+        if (!tracking) { tracking = true; trackMarker(); }
+        marker.classList.add('is-visible');
+        try { await navigator.clipboard.writeText(text); pickBtn.textContent = 'Copied ✓'; }
+        catch (e) { window.prompt('Copy this sensor point:', text); pickBtn.textContent = 'Pick sensor'; }
+        setTimeout(() => { pickBtn.textContent = 'Pick sensor'; }, 2200);
+      }, { pick: 'slow' });
+      tools.appendChild(pickBtn);
+      document.body.appendChild(tools);
+    }
+
+    /* ── Start the viewer ── */
+    function plainEmbed() {
+      const qs = new URLSearchParams(EMBED_OPTIONS).toString();
+      iframe.src = `https://sketchfab.com/models/${MODEL_UID}/embed?${qs}`;
+      revealTrigger();
+    }
+
+    if (typeof window.Sketchfab !== 'function') {
+      plainEmbed(); // API script blocked or offline: still show the model, just without the zoom
+    } else {
+      const client = new window.Sketchfab('1.12.1', iframe);
+      client.init(MODEL_UID, {
+        ...EMBED_OPTIONS,
+        success(instance) {
+          api = instance;
+          api.start();
+          api.addEventListener('viewerready', () => {
+            resolveReady();
+            revealTrigger();
+            if (frameMode) setupFrameTool();
+            // let the opening camera settle, then work out the close-up from the starting view
+            wait(1500).then(() => { if (!focusPromise) focusPromise = computeFocus(); });
+          });
+        },
+        error() { plainEmbed(); },
+      });
+    }
+  })();
+  </script>
 </body>
 </html>
